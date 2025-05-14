@@ -50,44 +50,65 @@ def extract_name(text, doc_type):
                     return name
 
     elif doc_type == "pan":
-        # Enhanced PAN patterns with header exclusion
+        # NEW OPTIMIZED PATTERNS ==============================================
         patterns = [
-            # Match name before PAN number (exclude headers)
-            r'(?:income\s+tax\s+department|government\s+of\s+india|permanent\s+account\s+number)(?:.*?\n){1,3}([a-z\s,]{8,}?)\n\s*([a-z]{5}\d{4}[a-z])',
-            # Match name field explicitly
-            r'(?:name\s*[^a-z]*?)([a-z\s,]{8,}?)\s*(?:\d|father|mother|applicant)',
-            # Match name in uppercase blocks
-            r'\n([A-Z][A-Z\s,]{8,}?)\n(?:father|mother|dob|permanent)'
+            # 1. Explicit NAME label with father name exclusion
+            r'(?:NAME|नाम|NOME)[\s:\-]*([A-Z]+(?:\s+[A-Z]+){1,2})(?=\s*(?:FATHER|MOTHER|\())',
+            
+            # 2. Line before PAN number (ABCDE1234F format)
+            r'([A-Z]+(?:\s+[A-Z]+){1,2})\s+(?=[A-Z]{5}\d{4}[A-Z])',
+            
+            # 3. Government header context (most PAN cards have this)
+            r'(?:GOVT\. OF INDIA|INCOME TAX DEPT)\s*([A-Z]+(?:\s+[A-Z]+){1,2})\s+(?:PERMANENT|CARD)',
+            
+            # 4. First valid name before father/mother markers
+            r'([A-Z]+(?:\s+[A-Z]+){1,2})\s+(?=\n\s*(?:FATHER|MOTHER))'
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, cleaned_text)
+            if match:
+                raw_name = match.group(1).strip()
+                
+                # Clean father name remnants using position analysis
+                if 'FATHER' in original_text:
+                    father_pos = original_text.find('FATHER')
+                    name_pos = original_text.find(raw_name)
+                    if father_pos != -1 and name_pos != -1:
+                        # Truncate at father name position
+                        clean_name = original_text[name_pos:father_pos].strip()
+                        return ' '.join(clean_name.split()[:3])
+
+                return ' '.join(raw_name.split()[:2])  # Strict 2-word limit
+
+        # FALLBACK: Position-based extraction ================================
+        pan_number = re.search(r'[A-Z]{5}\d{4}[A-Z]', cleaned_text)
+        if pan_number:
+            # Extract 2 words immediately before PAN number
+            before_pan = cleaned_text[:pan_number.start()].strip()
+            if before_pan:
+                words = before_pan.split()[-2:]
+                return ' '.join(words)
+
+        # Final filter for valid names ========================================
+        candidates = re.findall(r'\b([A-Z]+(?:\s+[A-Z]+){1,2})\b', cleaned_text)
+        valid = [
+            c for c in candidates
+            if 2 <= len(c.split()) <= 3
+            and not re.search(r'(FATHER|MOTHER|PAN|CARD|NUMBER|DATE)', c)
         ]
         
-        for pattern in patterns:
-            match = re.search(pattern, cleaned_text, re.DOTALL | re.IGNORECASE)
-            if match:
-                # Extract and clean the name group
-                name_group = match.group(1).strip()
-                # Remove titles and parent references
-                name = re.sub(r'\b(sri|shri|smt|kum|mr|mrs|ms|father|mother).*', '', name_group, flags=re.IGNORECASE)
-                name = re.sub(r',.*', '', name)  # Remove text after commas
-                name = re.sub(r'\s+', ' ', name).strip()
-                
-                if 2 <= len(name.split()) <= 4:
-                    return name.upper()
+        if valid:
+            # Return first name-like candidate near document start
+            positions = [(c, original_text.find(c)) for c in valid]
+            positions = [p for p in positions if p[1] != -1]
+            if positions:
+                best = min(positions, key=lambda x: x[1])
+                return best[0].split(',')[0].strip()[:25]  # Length limit
 
-    # Improved fallback with PAN header exclusion
-    candidates = re.findall(r'\b([A-Za-z]{3,}(?:\s+[A-Za-z]{3,}){1,3})\b', text)
-    valid_candidates = [
-        c for c in candidates
-        if not any(word in c.lower() for word in [
-            'father', 'mother', 'husband', 'wife',
-            'permanent', 'account', 'number', 'card'
-        ])
-    ]
-    
-    if valid_candidates:
-        best_candidate = max(valid_candidates, key=lambda x: (len(x), sum(c.isalpha() for c in x)))
-        return best_candidate.upper()
-    
     return "Not Found"
+
+
 
 def extract_dob(text):
     # Enhanced date extraction with priority sorting
